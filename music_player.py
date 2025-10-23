@@ -19,8 +19,8 @@ class MusicPlayer:
         self.voice_fallback = VoiceFallback()
         self.current_song: Optional[Dict] = None
         self.queue: List[Dict] = []
-        self.is_playing = False
-        self.is_paused = False
+        self.is_playing_flag = False
+        self.is_paused_flag = False
         self.volume = 0.5
         self.loop_mode = "off"  # off, single, queue
         self.shuffle = False
@@ -48,8 +48,8 @@ class MusicPlayer:
         if self.voice_client:
             await self.voice_client.disconnect()
             self.voice_client = None
-        self.is_playing = False
-        self.is_paused = False
+        self.is_playing_flag = False
+        self.is_paused_flag = False
         self.current_song = None
     
     async def add_to_queue(self, song: Dict, user: discord.Member, position: Optional[int] = None) -> int:
@@ -105,8 +105,8 @@ class MusicPlayer:
                     audio_source,
                     after=lambda e: asyncio.create_task(self._after_playing(e))
                 )
-                self.is_playing = True
-                self.is_paused = False
+                self.is_playing_flag = True
+                self.is_paused_flag = False
                 
         except Exception as e:
             logger.error(f"Error playing song: {e}")
@@ -134,15 +134,15 @@ class MusicPlayer:
         """Pause the current song"""
         if self.voice_client and self.voice_client.is_playing():
             self.voice_client.pause()
-            self.is_paused = True
-            self.is_playing = False
+            self.is_paused_flag = True
+            self.is_playing_flag = False
     
     async def resume(self):
         """Resume the current song"""
         if self.voice_client and self.voice_client.is_paused():
             self.voice_client.resume()
-            self.is_paused = False
-            self.is_playing = True
+            self.is_paused_flag = False
+            self.is_playing_flag = True
     
     async def skip(self):
         """Skip the current song"""
@@ -154,8 +154,8 @@ class MusicPlayer:
         """Stop playing and clear queue"""
         if self.voice_client:
             self.voice_client.stop()
-        self.is_playing = False
-        self.is_paused = False
+        self.is_playing_flag = False
+        self.is_paused_flag = False
         self.current_song = None
         self.queue.clear()
     
@@ -199,13 +199,13 @@ class MusicPlayer:
         """Get the number of songs in the queue"""
         return len(self.queue)
     
-    def is_playing(self) -> bool:
+    def is_playing_now(self) -> bool:
         """Check if music is currently playing"""
-        return self.is_playing and not self.is_paused
+        return self.is_playing_flag and not self.is_paused_flag
     
-    def is_paused(self) -> bool:
+    def is_paused_now(self) -> bool:
         """Check if music is paused"""
-        return self.is_paused
+        return self.is_paused_flag
     
     # Playlist management
     async def create_playlist(self, name: str, user: discord.Member):

@@ -63,7 +63,16 @@ class MusicUI:
         if song.get('view_count'):
             embed.add_field(name="Views", value=f"{song['view_count']:,}", inline=True)
         
-        embed.set_footer(text=f"Requested by {song.get('added_by', {}).get('display_name', 'Unknown')}")
+        # Determine requester name safely whether 'added_by' is a Member/User or a dict
+        added_by = song.get('added_by')
+        requester_name = 'Unknown'
+        if isinstance(added_by, (discord.Member, discord.User)):
+            # Prefer display_name for Member, fallback to name
+            requester_name = getattr(added_by, 'display_name', None) or getattr(added_by, 'name', 'Unknown')
+        elif isinstance(added_by, dict):
+            requester_name = added_by.get('display_name') or added_by.get('name', 'Unknown')
+
+        embed.set_footer(text=f"Requested by {requester_name}")
         embed.timestamp = datetime.now()
         
         return embed
@@ -240,7 +249,7 @@ class PlayerControlsView(discord.ui.View):
     @discord.ui.button(label="⏸️ Pause", style=discord.ButtonStyle.secondary, custom_id="pause")
     async def pause_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Pause button"""
-        if self.music_player.is_playing():
+        if self.music_player.is_playing_now():
             await self.music_player.pause()
             await interaction.response.send_message("⏸️ Music paused!", ephemeral=True)
         else:
@@ -249,7 +258,7 @@ class PlayerControlsView(discord.ui.View):
     @discord.ui.button(label="▶️ Resume", style=discord.ButtonStyle.secondary, custom_id="resume")
     async def resume_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Resume button"""
-        if self.music_player.is_paused():
+        if self.music_player.is_paused_now():
             await self.music_player.resume()
             await interaction.response.send_message("▶️ Music resumed!", ephemeral=True)
         else:
@@ -258,7 +267,7 @@ class PlayerControlsView(discord.ui.View):
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="skip")
     async def skip_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Skip button"""
-        if self.music_player.is_playing():
+        if self.music_player.is_playing_now():
             await self.music_player.skip()
             await interaction.response.send_message("⏭️ Song skipped!", ephemeral=True)
         else:
@@ -349,7 +358,7 @@ class ProviderSelectView(discord.ui.View):
             await interaction.followup.send(embed=embed, view=view)
             
             # Start playing if not already playing
-            if not self.music_player.is_playing():
+            if not self.music_player.is_playing_now():
                 await self.music_player.play_next()
         else:
             await interaction.followup.send("❌ No results found for your search!")

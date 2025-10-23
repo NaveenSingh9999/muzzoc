@@ -14,30 +14,125 @@ import base64
 import hashlib
 import time
 import random
+import browser_cookie3
+import requests
+from fake_useragent import UserAgent
 
 logger = logging.getLogger(__name__)
 
 class ProviderManager:
     def __init__(self):
         self.session = None
+        self.ua = UserAgent()
+        self.cookies = None
+        self.cookiefile_path = None
         self.user_agents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0'
         ]
         
     async def initialize(self):
-        """Initialize all providers"""
+        """Initialize all providers with cookie support and better headers"""
+        try:
+            # Try to get cookies from browser
+            self.cookies = self._get_browser_cookies()
+        except Exception as e:
+            logger.warning(f"Could not load browser cookies: {e}")
+            self.cookies = None
+        
+        # Create session with enhanced headers
+        headers = {
+            'User-Agent': self.ua.random,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        # Add cookies if available
+        cookie_jar = None
+        if self.cookies:
+            cookie_jar = aiohttp.CookieJar()
+            for cookie in self.cookies:
+                cookie_jar.update_cookies({cookie.name: cookie.value})
+        
         self.session = aiohttp.ClientSession(
-            headers={
-                'User-Agent': random.choice(self.user_agents),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
-            }
+            headers=headers,
+            cookie_jar=cookie_jar,
+            timeout=aiohttp.ClientTimeout(total=30)
         )
-        logger.info("Provider manager initialized with network-based extraction")
+        logger.info("Provider manager initialized with enhanced network-based extraction")
+
+        # Prepare cookies for yt-dlp if available
+        try:
+            if self.cookies:
+                self.cookiefile_path = self._write_cookies_to_file(self.cookies)
+        except Exception as e:
+            logger.warning(f"Could not persist cookies for yt-dlp: {e}")
+    
+    def _get_browser_cookies(self):
+        """Get cookies from browser for authentication"""
+        try:
+            # Try Chrome first, then Firefox, then Edge
+            for browser in ['chrome', 'firefox', 'edge']:
+                try:
+                    if browser == 'chrome':
+                        return browser_cookie3.chrome(domain_name='youtube.com')
+                    elif browser == 'firefox':
+                        return browser_cookie3.firefox(domain_name='youtube.com')
+                    elif browser == 'edge':
+                        return browser_cookie3.edge(domain_name='youtube.com')
+                except Exception:
+                    continue
+            return None
+        except Exception as e:
+            logger.warning(f"Could not extract browser cookies: {e}")
+            return None
+
+    def _write_cookies_to_file(self, cookiejar):
+        """Persist cookies to a Netscape cookie file for yt-dlp consumption."""
+        try:
+            os.makedirs(DOWNLOAD_PATH, exist_ok=True)
+            cookie_path = os.path.join(DOWNLOAD_PATH, 'yt_cookies.txt')
+            with open(cookie_path, 'w', encoding='utf-8') as f:
+                f.write('# Netscape HTTP Cookie File\n')
+                # Fields: domain, include_subdomains, path, secure, expires, name, value
+                for c in cookiejar:
+                    domain = c.domain if hasattr(c, 'domain') and c.domain else '.youtube.com'
+                    include_sub = 'TRUE' if (getattr(c, 'domain_initial_dot', False) or str(domain).startswith('.')) else 'FALSE'
+                    path = c.path if hasattr(c, 'path') and c.path else '/'
+                    secure = 'TRUE' if getattr(c, 'secure', False) else 'FALSE'
+                    expires = int(getattr(c, 'expires', 0) or 0)
+                    name = c.name
+                    value = c.value
+                    f.write(f"{domain}\t{include_sub}\t{path}\t{secure}\t{expires}\t{name}\t{value}\n")
+            return cookie_path
+        except Exception as e:
+            logger.warning(f"Failed writing cookies file: {e}")
+            return None
+
+    def _build_yt_dlp_opts(self, base_overrides: Optional[Dict] = None) -> Dict:
+        """Construct yt-dlp options using the EXACT same approach as app.py"""
+        # Copy the EXACT configuration from app.py that works
+        opts: Dict[str, Any] = {
+            'format': 'bestaudio/best',
+            'noplaylist': True,
+            'quiet': True,
+            'no_warnings': True,
+        }
+
+        if base_overrides:
+            opts.update(base_overrides)
+        return opts
     
     async def search(self, query: str, provider: str = "yt") -> Optional[Dict]:
         """Search for a song using network-based extraction"""
@@ -56,28 +151,35 @@ class ProviderManager:
             return None
     
     async def _network_search_youtube(self, query: str) -> Optional[Dict]:
-        """Search YouTube using network interception and direct extraction"""
+        """Search YouTube using the EXACT same approach as app.py"""
         try:
-            # Step 1: Search YouTube using network requests
-            search_url = f"https://www.youtube.com/results?search_query={quote_plus(query)}"
+            # Use the EXACT same configuration as app.py
+            ydl_opts = {
+                'format': 'bestaudio/best',
+                'default_search': 'ytsearch1',
+                'noplaylist': True,
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+            }
             
-            async with self.session.get(search_url) as response:
-                if response.status != 200:
-                    return None
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(query, download=False)
                 
-                html_content = await response.text()
-            
-            # Step 2: Extract video IDs from the search results
-            video_ids = self._extract_video_ids_from_html(html_content)
-            if not video_ids:
-                return None
-            
-            # Step 3: Get the first video's details using network interception
-            video_id = video_ids[0]
-            return await self._extract_youtube_video_info(video_id, query)
+                if info:
+                    return {
+                        'title': info.get('title', 'Unknown'),
+                        'url': info.get('webpage_url', info.get('url', '')),
+                        'duration': info.get('duration', 0),
+                        'thumbnail': info.get('thumbnail', ''),
+                        'uploader': info.get('uploader', 'Unknown'),
+                        'provider': 'youtube',
+                        'id': info.get('id', ''),
+                        'view_count': info.get('view_count', 0)
+                    }
             
         except Exception as e:
-            logger.error(f"YouTube network search error: {e}")
+            logger.error(f"YouTube search error: {e}")
         return None
     
     def _extract_video_ids_from_html(self, html_content: str) -> List[str]:
@@ -201,14 +303,9 @@ class ProviderManager:
                 matches = re.findall(pattern, html_content)
                 audio_urls.extend(matches)
             
-            # Method 2: Use yt-dlp as fallback for direct extraction
+            # Method 2: Use yt-dlp as fallback for direct extraction (with cookies/headers)
             if not audio_urls:
-                ydl_opts = {
-                    'format': 'bestaudio/best',
-                    'quiet': True,
-                    'no_warnings': True,
-                    'extract_flat': False
-                }
+                ydl_opts = self._build_yt_dlp_opts()
                 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
@@ -381,26 +478,9 @@ class ProviderManager:
             return None
     
     async def _get_network_youtube_stream(self, song: Dict) -> Optional[discord.FFmpegPCMAudio]:
-        """Get YouTube audio stream using network-extracted URLs"""
+        """Get YouTube audio stream using the EXACT same approach as app.py"""
         try:
-            # First try to use pre-extracted audio URLs
-            audio_urls = song.get('audio_urls', [])
-            if audio_urls:
-                for audio_url in audio_urls:
-                    try:
-                        # Test if URL is accessible
-                        async with self.session.head(audio_url, timeout=5) as response:
-                            if response.status == 200:
-                                # Create FFmpeg audio source with optimized settings
-                                ffmpeg_options = {
-                                    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2',
-                                    'options': '-vn -bufsize 512k'
-                                }
-                                return discord.FFmpegPCMAudio(audio_url, **ffmpeg_options)
-                    except:
-                        continue
-            
-            # Fallback to yt-dlp if no pre-extracted URLs work
+            # Use the EXACT same configuration as app.py
             url = song.get('url', '')
             if not url:
                 return None
@@ -410,7 +490,6 @@ class ProviderManager:
                 'noplaylist': True,
                 'quiet': True,
                 'no_warnings': True,
-                'extract_flat': False
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -495,13 +574,19 @@ class ProviderManager:
         return None
     
     async def download(self, song: Dict, quality: str = "high", user: discord.Member = None) -> Optional[str]:
-        """Download a song to a file"""
+        """Download a song to a file with enhanced metadata embedding (inspired by app.py)"""
         try:
             provider = song.get('provider', 'youtube')
             title = song.get('title', 'Unknown')
+            artist = song.get('artist', song.get('uploader', 'Unknown Artist'))
+            album = song.get('album', 'Unknown Album')
+            thumbnail_url = song.get('thumbnail', '')
             
-            # Sanitize filename
-            safe_title = re.sub(r'[^\w\s-]', '', title).strip()
+            # Enhanced filename sanitization (inspired by app.py)
+            def sanitize_filename(name):
+                return "".join(c for c in name if c.isalnum() or c in " _-").rstrip()
+            
+            safe_title = sanitize_filename(title)
             safe_title = re.sub(r'[-\s]+', '-', safe_title)
             
             # Set quality options
@@ -513,47 +598,86 @@ class ProviderManager:
             
             format_selector = quality_map.get(quality, quality_map['high'])
             
-            # Create temporary file
-            temp_file = tempfile.NamedTemporaryFile(
-                suffix='.mp3',
-                delete=False,
-                dir=DOWNLOAD_PATH
-            )
-            temp_path = temp_file.name
-            temp_file.close()
+            # Create download directory if it doesn't exist
+            os.makedirs(DOWNLOAD_PATH, exist_ok=True)
             
-            # Download options
-            ydl_opts = {
+            # Create final file path
+            final_path = os.path.join(DOWNLOAD_PATH, f"{safe_title}.mp3")
+            
+            # Enhanced download options with progress tracking and thumbnail
+            ydl_opts = self._build_yt_dlp_opts({
                 'format': format_selector,
-                'outtmpl': temp_path,
-                'quiet': True,
-                'no_warnings': True,
+                'outtmpl': final_path,
+                'writethumbnail': True,  # Download thumbnail like app.py
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': 'mp3',
                     'preferredquality': '192',
                 }]
-            }
+            })
+            
+            # Add progress tracking (inspired by app.py)
+            def progress_hook(d):
+                if d['status'] == 'downloading':
+                    logger.info(f"Downloading: {d.get('_percent_str', '0%')} - ETA: {d.get('_eta_str', 'Unknown')}")
+                elif d['status'] == 'finished':
+                    logger.info("Download finished, processing...")
+            
+            ydl_opts['progress_hooks'] = [progress_hook]
             
             url = song.get('url', '')
             if not url:
                 return None
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+                info = ydl.extract_info(url, download=True)
             
-            # Verify file was created and has content
-            if os.path.exists(temp_path) and os.path.getsize(temp_path) > 0:
-                return temp_path
+            # Enhanced metadata embedding (inspired by app.py)
+            if os.path.exists(final_path):
+                try:
+                    # Embed ID3 metadata
+                    from mutagen.easyid3 import EasyID3
+                    from mutagen.id3 import ID3, APIC
+                    
+                    try:
+                        audio = EasyID3(final_path)
+                    except:
+                        audio = EasyID3()
+                    
+                    audio["title"] = title
+                    audio["artist"] = artist
+                    audio["album"] = album
+                    audio.save(final_path)
+                    
+                    # Embed thumbnail if available
+                    if thumbnail_url:
+                        try:
+                            img_data = requests.get(thumbnail_url, timeout=10).content
+                            audio = ID3(final_path)
+                            audio['APIC'] = APIC(
+                                encoding=3,
+                                mime='image/jpeg',
+                                type=3,
+                                desc='Cover',
+                                data=img_data
+                            )
+                            audio.save(final_path)
+                        except Exception as e:
+                            logger.warning(f"Could not embed thumbnail: {e}")
+                    
+                    logger.info(f"Successfully downloaded and embedded metadata for: {title}")
+                    return final_path
+                    
+                except Exception as e:
+                    logger.error(f"Metadata embedding error: {e}")
+                    return final_path  # Return file even if metadata failed
             else:
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
                 return None
                 
         except Exception as e:
             logger.error(f"Download error: {e}")
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            if 'final_path' in locals() and os.path.exists(final_path):
+                os.remove(final_path)
             return None
     
     async def get_playlist_info(self, url: str) -> Optional[List[Dict]]:
